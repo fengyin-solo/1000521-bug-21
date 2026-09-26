@@ -5,6 +5,9 @@ services:
       - "8000:8000"
     environment:
       - APP_ENV=local
+    volumes:
+      # 状态流转结果落盘到 backend/data，容器重建后刷新页面结果不丢
+      - ./backend/data:/srv/app/data
   frontend:
     build: ./frontend
     ports:

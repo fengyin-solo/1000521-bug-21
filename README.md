@@ -17,7 +17,8 @@
 ├── backend/                  FastAPI（Python） 后端
 │   ├── app/routers/          每个业务模块一组接口
 │   ├── app/services/         业务规则与状态流转
-│   └── app/store.py          内存数据仓库与示例数据
+│   ├── app/store.py          数据仓库（种子打底，变更落盘到 data/store.json）
+│   └── data/                 运行期落盘数据（首次启动自动生成，已 gitignore）
 ├── .gitignore
 └── docker-compose.yml
 ```

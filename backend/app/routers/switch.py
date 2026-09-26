@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
-from app.services.switch import SwitchService
+from app.services.switch import ALLOWED_ACTIONS, SwitchService
 
 router = APIRouter(prefix="/api/switch", tags=["转辙机"])
 
@@ -28,6 +28,25 @@ def list_entries(
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/stats")
+def get_stats() -> dict[str, Any]:
+    """转辙机统计卡片：在运、动作异常、待检修台数，随状态流转实时更新。"""
+    return service.stats()
+
+
+@router.get("/actions-meta")
+def get_actions_meta() -> dict[str, Any]:
+    """把状态机允许的动作下发给前端，用于按当前状态启停按钮；后端仍会再次校验。"""
+    return {"allowed": {status: list(actions) for status, actions in ALLOWED_ACTIONS.items()}}
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出转辙机清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "switch", "total": total, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -56,10 +75,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出转辙机清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "switch", "total": total, "items": items}
