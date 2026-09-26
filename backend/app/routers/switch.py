@@ -30,6 +30,19 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/stats")
+def get_stats() -> dict[str, Any]:
+    """顶部统计卡片：在运、动作异常、待检修台数，动作执行后随列表一起刷新。"""
+    return {"items": service.stats()}
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出转辙机清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "switch", "total": total, "items": items}
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条转辙机明细；不存在时给出可读的错误说明。"""
@@ -56,10 +69,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出转辙机清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "switch", "total": total, "items": items}

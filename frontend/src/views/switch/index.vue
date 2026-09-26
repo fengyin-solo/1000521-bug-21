@@ -43,6 +43,8 @@
               :key="action"
               class="link"
               type="button"
+              :disabled="!isActionAllowed(action, row)"
+              :title="actionHint(action, row)"
               @click="runAction(action, row)"
             >
               {{ action }}
@@ -67,19 +69,53 @@ import { onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
 
-type Row = Record<string, string | number | null>
+type Row = Record<string, string | number | boolean | null>
+type Stat = { label: string; value: number }
+type ActionResult = { ok: boolean; message: string; entry?: Row | null }
 
 const ENDPOINT = '/api/switch'
 const columns = ["设备编号", "设备型号", "安装道岔", "动作电流", "转换时间", "所属区段", "上次检修日", "设备状态"]
 const actions = ["确认检修", "登记动作异常", "更换设备"]
 const statuses = ["待检修", "运用正常", "动作异常", "已更换"]
-const stats = [{"label": "在运转辙机", "value": 0}, {"label": "动作异常台数", "value": 0}, {"label": "待检修台数", "value": 0}]
+// 与后端状态机保持一致：每行只放开当前状态允许的那个动作。
+const allowedActions: Record<string, string[]> = {
+  "待检修": ["确认检修"],
+  "运用正常": ["登记动作异常"],
+  "动作异常": ["更换设备"],
+  "已更换": [],
+}
 
 const rows = ref<Row[]>([])
 const total = ref(0)
+const stats = ref<Stat[]>([
+  { "label": "在运转辙机", "value": 0 },
+  { "label": "动作异常台数", "value": 0 },
+  { "label": "待检修台数", "value": 0 },
+])
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
+function isActionAllowed(action: string, row: Row) {
+  return allowedActions[String(row.status ?? '')]?.includes(action) ?? false
+}
+
+function actionHint(action: string, row: Row) {
+  if (isActionAllowed(action, row)) {
+    return `执行${action}`
+  }
+  const status = String(row.status ?? '')
+  if (status === '已更换') {
+    return '该转辙机已更换，动作已全部关闭'
+  }
+  if (action === '登记动作异常' && status === '动作异常') {
+    return '已处于动作异常状态，无需重复登记'
+  }
+  const open = allowedActions[status] ?? []
+  return open.length
+    ? `当前为「${status}」状态，只能执行${open.join('、')}`
+    : `当前为「${status}」状态，不允许执行${action}`
+}
 
 function resetFilters() {
   filters.value = {}
@@ -95,18 +131,48 @@ function openCreate() {
 }
 
 async function runAction(action: string, row: Row) {
+  if (!isActionAllowed(action, row)) {
+    errorMessage.value = actionHint(action, row)
+    return
+  }
   errorMessage.value = ''
   try {
+    // 后端约定动作要放在 values 里；只看 HTTP 状态码会把业务拒绝误判成成功。
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ values: { action } }),
     })
-    if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as ActionResult | null
+    if (!response.ok || !payload) {
       throw new Error('转辙机动作未生效，请稍后重试')
     }
-    await reload()
+    if (!payload.ok) {
+      // 被状态机/幂等拦下：展示后端给出的具体原因，列表与统计保持原样。
+      errorMessage.value = payload.message
+      return
+    }
+    if (payload.entry) {
+      Object.assign(row, payload.entry)
+    }
+    // 状态变更后列表、统计卡片同时刷新，保证三者口径一致。
+    await Promise.all([reload(), reloadStats()])
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '转辙机操作失败'
+  }
+}
+
+async function reloadStats() {
+  try {
+    const response = await request(`${ENDPOINT}/stats`)
+    if (!response.ok) {
+      return
+    }
+    const payload = await response.json()
+    if (Array.isArray(payload.items)) {
+      stats.value = payload.items
+    }
+  } catch {
+    // 统计刷新失败不打断列表操作，下次动作或进页面时会再取。
   }
 }
 
@@ -126,5 +192,8 @@ async function reload() {
   }
 }
 
-onMounted(reload)
+onMounted(() => {
+  void reload()
+  void reloadStats()
+})
 </script>

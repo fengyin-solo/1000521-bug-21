@@ -1,19 +1,65 @@
-"""内存数据仓库：给每个业务模块准备一份可筛选、可流转的示例数据。
+"""数据仓库：给每个业务模块准备一份可筛选、可流转的示例数据。
 
-真实项目里这里会换成数据库访问层；当前实现只依赖标准库，保证克隆下来就能起。
+数据落在进程内存里方便读写，所有写操作都会顺手落一份 JSON 快照到 data/store.json：
+页面刷新天然不丢，后端重启后也能接着用。真实项目里这里会换成数据库访问层。
 """
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from typing import Any
 
 from app.seed import SEED_ROWS
 
+# 快照结构升级时把版本号抬高，旧文件会被忽略并重新播种，避免新旧字段打架。
+SNAPSHOT_VERSION = 1
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+_SNAPSHOT_PATH = os.path.join(_DATA_DIR, "store.json")
+
 
 class Store:
     def __init__(self) -> None:
-        self._tables: dict[str, list[dict[str, Any]]] = {
-            name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
-        }
+        snapshot = self._load_snapshot()
+        if snapshot is None:
+            self._tables: dict[str, list[dict[str, Any]]] = {
+                name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
+            }
+        else:
+            self._tables = {
+                name: [dict(row) for row in rows]
+                for name, rows in snapshot.items()
+                if isinstance(rows, list)
+            }
+            # 新版本里新增的模块也要补齐，老快照里不会有它们。
+            for name, rows in SEED_ROWS.items():
+                self._tables.setdefault(name, [dict(row) for row in rows])
+
+    def _load_snapshot(self) -> dict[str, Any] | None:
+        """读取磁盘快照；文件缺失、损坏或版本过旧时返回 None 走播种。"""
+        try:
+            with open(_SNAPSHOT_PATH, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(payload, dict) or payload.get("version") != SNAPSHOT_VERSION:
+            return None
+        tables = payload.get("tables")
+        return tables if isinstance(tables, dict) else None
+
+    def save(self) -> None:
+        """把当前全量数据原子写回磁盘，避免半截文件把下次启动搞挂。"""
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        payload = {"version": SNAPSHOT_VERSION, "tables": self._tables}
+        fd, tmp_path = tempfile.mkstemp(prefix=".store-", suffix=".json", dir=_DATA_DIR)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False)
+            os.replace(tmp_path, _SNAPSHOT_PATH)
+        except OSError:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)
